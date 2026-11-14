@@ -104,6 +104,11 @@
   .tag-ok { background: #dcfce7; color: #166534; }
 
   /* Modal */
+  .calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+  .calc-grid button { padding: 14px 0; font-size: 18px; border: none; border-radius: 10px; background: #f3f4f6; color: var(--text); cursor: pointer; }
+  .calc-grid button:hover { filter: brightness(0.96); }
+  .calc-grid button.op { background: #eef2ff; color: var(--primary); }
+  .calc-grid button.eq { background: var(--primary); color: #fff; grid-column: 1 / -1; }
   .modal-bg {
     position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none;
     align-items: center; justify-content: center; z-index: 100; padding: 16px;
@@ -159,6 +164,7 @@
   <div class="user-box">
     <span id="currentUser"></span>
     <span id="shiftBadge" class="shift-badge shift-closed">مغلقة</span>
+    <button class="btn-light" id="calcBtn">🧮 الحاسبة</button>
     <button class="btn-light" id="logoutBtn">تسجيل خروج</button>
   </div>
 </header>
@@ -266,7 +272,7 @@
       <div style="overflow:auto;">
         <table class="data">
           <thead>
-            <tr><th>الباركود</th><th>المنتج</th><th>التصنيف</th><th>المكان</th><th>سعر البيع</th><th>التكلفة</th><th>الكمية</th><th>الحالة</th><th></th></tr>
+            <tr><th>الباركود</th><th>المنتج</th><th>التصنيف</th><th>المكان</th><th>التكلفة</th><th>الكمية</th><th>الحالة</th><th></th></tr>
           </thead>
           <tbody id="invBody"></tbody>
         </table>
@@ -396,6 +402,33 @@
 
 </main>
 
+<!-- Price Picker Modal (per-customer price) -->
+<div class="modal-bg" id="priceModal">
+  <div class="modal" style="max-width:360px;">
+    <h3 id="priceModalTitle">سعر البيع</h3>
+    <div class="form-grid">
+      <div><label id="priceModalName"></label><input type="number" id="priceInput" min="0" step="0.01" placeholder="0.00"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-light" data-close>إلغاء</button>
+      <button class="btn-primary" id="priceConfirmBtn">تأكيد</button>
+    </div>
+  </div>
+</div>
+
+<!-- Calculator Modal -->
+<div class="modal-bg" id="calcModal">
+  <div class="modal" style="max-width:340px;">
+    <h3>الحاسبة</h3>
+    <div id="calcExpr" style="text-align:left;direction:ltr;color:var(--muted);min-height:20px;font-size:14px;"></div>
+    <div id="calcDisplay" style="text-align:left;direction:ltr;font-size:30px;font-weight:700;min-height:40px;overflow:hidden;">0</div>
+    <div class="calc-grid" id="calcGrid"></div>
+    <div class="modal-actions">
+      <button class="btn-light" data-close>إغلاق</button>
+    </div>
+  </div>
+</div>
+
 <!-- Product Modal -->
 <div class="modal-bg" id="productModal">
   <div class="modal">
@@ -407,10 +440,7 @@
         <div><label>الباركود</label><input id="pBarcode"></div>
         <div><label>التصنيف</label><input id="pCategory" list="catList"><datalist id="catList"></datalist></div>
       </div>
-      <div class="form-row">
-        <div><label>سعر البيع</label><input type="number" id="pPrice" min="0" step="0.01"></div>
-        <div><label>التكلفة</label><input type="number" id="pCost" min="0" step="0.01"></div>
-      </div>
+      <div><label>التكلفة (اختياري)</label><input type="number" id="pCost" min="0" step="0.01"></div>
       <div class="form-row">
         <div><label>الكمية</label><input type="number" id="pStock" min="0"></div>
         <div><label>حد التنبيه</label><input type="number" id="pMin" min="0"></div>
@@ -588,8 +618,7 @@
   function productByBarcode(code) { return data.products.find((p) => p.barcode === code); }
 
   function cartQtyOf(id) {
-    const line = cart.find((l) => l.id === id);
-    return line ? line.qty : 0;
+    return cart.filter((l) => l.id === id).reduce((a, l) => a + l.qty, 0);
   }
 
   // ============ AUTH ============
@@ -754,35 +783,80 @@
       return `
         <button class="product-tile" data-id="${p.id}" ${out ? "disabled" : ""}>
           <div class="name">${esc(p.name)}</div>
-          <div class="price">${money(p.price)}</div>
+          <div class="price">حسب الزبون</div>
           <div class="stock ${low && !out ? "low" : ""}">${out ? "نفد" : "متاح: " + left}</div>
         </button>`;
     }).join("") || `<div class="empty" style="grid-column:1/-1;">مفيش منتجات</div>`;
   }
 
+  // ---- Per-customer pricing: every cart line keeps its own price ----
+  let pricePicker = null; // {mode:'add', id} | {mode:'edit', lid}
+
+  function openPricePicker(ctx) {
+    pricePicker = ctx;
+    let title = "سعر البيع", name = "", val = "";
+    if (ctx.mode === "add") {
+      const p = productById(ctx.id);
+      if (!p) return;
+      name = p.name;
+    } else {
+      const line = cart.find((l) => l.lid === ctx.lid);
+      if (!line) return;
+      name = productById(line.id).name;
+      val = line.price;
+      title = "تعديل السعر";
+    }
+    $("priceModalTitle").textContent = title;
+    $("priceModalName").textContent = name;
+    $("priceInput").value = val;
+    openModal("priceModal");
+    setTimeout(() => { $("priceInput").focus(); $("priceInput").select(); }, 50);
+  }
+
+  function confirmPrice() {
+    const raw = $("priceInput").value.trim();
+    const price = Math.round(Number(raw) * 100) / 100;
+    if (raw === "" || !Number.isFinite(price) || price < 0) { toast("اكتب سعر صحيح"); return; }
+    if (!pricePicker) return;
+
+    if (pricePicker.mode === "add") {
+      const p = productById(pricePicker.id);
+      if (!p) return;
+      if (cartQtyOf(p.id) + 1 > p.stock) { toast("الكمية مش كفاية في المخزون"); closeModal("priceModal"); return; }
+      const same = cart.find((l) => l.id === p.id && l.price === price);
+      if (same) same.qty++;
+      else cart.push({ lid: uid(), id: p.id, qty: 1, price });
+    } else {
+      const line = cart.find((l) => l.lid === pricePicker.lid);
+      if (!line) return;
+      const dup = cart.find((l) => l !== line && l.id === line.id && l.price === price);
+      if (dup) { dup.qty += line.qty; cart = cart.filter((l) => l !== line); }
+      else line.price = price;
+    }
+    pricePicker = null;
+    closeModal("priceModal");
+    renderCart();
+  }
+
   function addToCart(id) {
     const p = productById(id);
     if (!p) return;
-    const line = cart.find((l) => l.id === id);
-    const have = line ? line.qty : 0;
-    if (have + 1 > p.stock) { toast("الكمية مش كفاية في المخزون"); return; }
-    if (line) line.qty++;
-    else cart.push({ id, qty: 1 });
-    renderCart();
+    if (cartQtyOf(id) + 1 > p.stock) { toast("الكمية مش كفاية في المخزون"); return; }
+    openPricePicker({ mode: "add", id });
   }
 
-  function changeQty(id, delta) {
-    const line = cart.find((l) => l.id === id);
+  function changeQty(lid, delta) {
+    const line = cart.find((l) => l.lid === lid);
     if (!line) return;
-    const p = productById(id);
-    if (delta > 0 && line.qty + 1 > p.stock) { toast("الكمية مش كفاية"); return; }
+    const p = productById(line.id);
+    if (delta > 0 && cartQtyOf(line.id) + 1 > p.stock) { toast("الكمية مش كفاية"); return; }
     line.qty += delta;
-    if (line.qty <= 0) cart = cart.filter((l) => l.id !== id);
+    if (line.qty <= 0) cart = cart.filter((l) => l.lid !== lid);
     renderCart();
   }
 
-  function calcTotals() {
-    const subtotal = cart.reduce((a, l) => a + productById(l.id).price * l.qty, 0);
+    function calcTotals() {
+    const subtotal = cart.reduce((a, l) => a + l.price * l.qty, 0);
     let disc = discount.type === "percent" ? subtotal * (discount.value / 100) : discount.value;
     disc = Math.min(Math.max(disc, 0), subtotal);
     const total = Math.round((subtotal - disc) * 100) / 100;
@@ -801,10 +875,10 @@
         return `
           <tr>
             <td>${esc(p.name)}</td>
-            <td><div class="qty-ctrl"><button data-q="-1" data-id="${l.id}">−</button>${l.qty}<button data-q="1" data-id="${l.id}">+</button></div></td>
-            <td>${money(p.price)}</td>
-            <td>${money(p.price * l.qty)}</td>
-            <td><button class="btn-danger" style="padding:2px 8px;" data-remove="${l.id}">×</button></td>
+            <td><div class="qty-ctrl"><button data-q="-1" data-lid="${l.lid}">−</button>${l.qty}<button data-q="1" data-lid="${l.lid}">+</button></div></td>
+            <td><span data-price="${l.lid}" style="cursor:pointer;color:var(--primary);text-decoration:underline dotted;">${money(l.price)}</span></td>
+            <td>${money(l.price * l.qty)}</td>
+            <td><button class="btn-danger" style="padding:2px 8px;" data-remove="${l.lid}">×</button></td>
           </tr>`;
       }).join("");
     }
@@ -941,14 +1015,13 @@
           <td>${esc(p.name)}</td>
           <td>${esc(p.category)}</td>
           <td>${esc(p.loc || "-")}</td>
-          <td>${money(p.price)}</td>
           <td>${money(p.cost)}</td>
           <td>${p.stock}</td>
           <td>${status}</td>
           <td><button class="btn-ghost" style="padding:4px 10px;" data-edit="${p.id}">تعديل</button>
               <button class="btn-danger" style="padding:4px 10px;" data-delp="${p.id}">حذف</button></td>
         </tr>`;
-    }).join("") || `<tr><td colspan="9" class="empty">مفيش منتجات</td></tr>`;
+    }).join("") || `<tr><td colspan="8" class="empty">مفيش منتجات</td></tr>`;
 
     $("returnBtn").onclick = openReturn;
     renderWhExtras();
@@ -960,7 +1033,6 @@
     $("pName").value = p ? p.name : "";
     $("pBarcode").value = p ? p.barcode : "";
     $("pCategory").value = p ? p.category : "";
-    $("pPrice").value = p ? p.price : "";
     $("pCost").value = p ? p.cost : "";
     $("pStock").value = p ? p.stock : "";
     $("pMin").value = p ? p.min : data.settings.lowStock;
@@ -972,7 +1044,6 @@
     const name = $("pName").value.trim();
     const barcode = $("pBarcode").value.trim() || String(100000 + Math.floor(Math.random() * 899999));
     if (!name) { toast("اكتب اسم المنتج"); return; }
-    if (!$("pPrice").value) { toast("اكتب سعر البيع"); return; }
     const dup = data.products.find((p) => p.barcode === barcode && p.id !== $("pId").value);
     if (dup) { toast("الباركود ده موجود بالفعل"); return; }
 
@@ -980,7 +1051,6 @@
       name,
       barcode,
       category: $("pCategory").value.trim() || "عام",
-      price: num($("pPrice").value),
       cost: num($("pCost").value),
       stock: Math.max(0, Math.floor(num($("pStock").value))),
       min: Math.max(0, Math.floor(num($("pMin").value))),
@@ -1140,7 +1210,7 @@
         const arrays = ["users", "products", "sales", "returns", "shifts", "customers", "moves", "stockLog"];
         if (!parsed || typeof parsed !== "object" || !parsed.settings || arrays.some((k) => !Array.isArray(parsed[k]))) throw new Error("bad structure");
         if (!parsed.users.length || parsed.users.some((u) => !u.id || !u.name || !u.pass || !["manager", "cashier"].includes(u.role))) throw new Error("bad users");
-        if (parsed.products.some((p) => !p.id || !p.name || !Number.isFinite(Number(p.price)) || Number(p.price) < 0 || !Number.isFinite(Number(p.stock)) || Number(p.stock) < 0)) throw new Error("bad products");
+        if (parsed.products.some((p) => !p.id || !p.name || !Number.isFinite(Number(p.stock)) || Number(p.stock) < 0)) throw new Error("bad products");
         if (!Number.isFinite(Number(parsed.invoiceCounter)) || Number(parsed.invoiceCounter) < 0) throw new Error("bad counter");
         if (!confirm("الاستعادة هتستبدل كل البيانات الحالية. تكمل؟")) return;
         data = parsed;
@@ -1187,6 +1257,70 @@
   // ============ EVENTS ============
   $("loginBtn").onclick = login;
   $("loginPass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+  // ============ CALCULATOR ============
+  let calcExpr = "";
+  let calcResult = "";
+  const CALC_KEYS = [
+    ["C", "⌫", "(", ")"],
+    ["7", "8", "9", "/"],
+    ["4", "5", "6", "*"],
+    ["1", "2", "3", "-"],
+    ["0", ".", "%", "+"]
+  ];
+  const CALC_LABEL = { "*": "×", "/": "÷", "-": "−" };
+  $("calcGrid").innerHTML = CALC_KEYS.map((row) => row.map((k) =>
+    `<button data-k="${esc(k)}" class="${"+-*/%⌫C".includes(k) ? "op" : ""}">${CALC_LABEL[k] || k}</button>`
+  ).join("")).join("") + `<button data-k="=" class="eq">=</button>`;
+
+  function renderCalc() {
+    $("calcExpr").textContent = calcResult ? calcExpr + " =" : "";
+    $("calcDisplay").textContent = calcResult || calcExpr || "0";
+  }
+
+  function calcEvaluate() {
+    if (!calcExpr) return;
+    const src = calcExpr.replace(/%/g, "/100").replace(/[+\-*/.]+$/, "");
+    if (!src || !/^[0-9+\-*/.() ]+$/.test(src)) return;
+    try {
+      const r = Function('"use strict"; return (' + src + ");")();
+      if (!Number.isFinite(r)) throw new Error("bad");
+      calcResult = String(Math.round(r * 1e10) / 1e10);
+    } catch (e) {
+      calcResult = "خطأ";
+    }
+    renderCalc();
+  }
+
+  function calcInput(k) {
+    if (k === "=") return calcEvaluate();
+    if (k === "C") { calcExpr = ""; calcResult = ""; }
+    else if (k === "⌫") {
+      if (calcResult) { calcExpr = ""; calcResult = ""; }
+      else calcExpr = calcExpr.slice(0, -1);
+    } else {
+      if (calcResult) {
+        calcExpr = (calcResult === "خطأ" || /[0-9.]/.test(k)) ? "" : calcResult;
+        calcResult = "";
+      }
+      calcExpr += k;
+    }
+    renderCalc();
+  }
+
+  $("calcBtn").onclick = () => { renderCalc(); openModal("calcModal"); };
+  $("calcGrid").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-k]");
+    if (b) calcInput(b.dataset.k);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!$("calcModal").classList.contains("show")) return;
+    if (e.key === "Enter" || e.key === "=") { e.preventDefault(); calcInput("="); }
+    else if (e.key === "Backspace") calcInput("⌫");
+    else if (e.key === "Delete") calcInput("C");
+    else if (e.key === "Escape") closeModal("calcModal");
+    else if (/^[0-9.+\-*/()%]$/.test(e.key)) { e.preventDefault(); calcInput(e.key); }
+  });
+
   $("logoutBtn").onclick = logout;
 
   document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => showPage(b.dataset.page)));
@@ -1208,10 +1342,15 @@
 
   $("cartBody").addEventListener("click", (e) => {
     const q = e.target.closest("[data-q]");
-    if (q) changeQty(q.dataset.id, parseInt(q.dataset.q, 10));
+    if (q) changeQty(q.dataset.lid, parseInt(q.dataset.q, 10));
     const r = e.target.closest("[data-remove]");
-    if (r) { cart = cart.filter((l) => l.id !== r.dataset.remove); renderCart(); }
+    if (r) { cart = cart.filter((l) => l.lid !== r.dataset.remove); renderCart(); }
+    const pr = e.target.closest("[data-price]");
+    if (pr) openPricePicker({ mode: "edit", lid: pr.dataset.price });
   });
+
+  $("priceConfirmBtn").onclick = confirmPrice;
+  $("priceInput").addEventListener("keydown", (e) => { if (e.key === "Enter") confirmPrice(); });
 
   $("discountInput").addEventListener("input", () => {
     discount.value = num($("discountInput").value);
@@ -1328,12 +1467,11 @@
   function renderWhExtras() {
     const units = data.products.reduce((a, p) => a + p.stock, 0);
     const costVal = data.products.reduce((a, p) => a + p.stock * p.cost, 0);
-    const saleVal = data.products.reduce((a, p) => a + p.stock * p.price, 0);
     $("whStats").innerHTML = `
       <div class="stat"><div class="label">عدد الأصناف</div><div class="value">${data.products.length}</div></div>
       <div class="stat"><div class="label">إجمالي القطع</div><div class="value">${units}</div></div>
       <div class="stat"><div class="label">قيمة المخزن بالتكلفة</div><div class="value">${money(costVal)}</div></div>
-      <div class="stat"><div class="label">قيمة المخزن بسعر البيع</div><div class="value">${money(saleVal)}</div></div>`;
+      `;
     $("stockLogBody").innerHTML = data.stockLog.slice(-50).reverse().map((l) => `
       <tr><td>${fmtDate(l.at)}</td><td>${esc(l.name)}</td><td>${l.qty > 0 ? "+" : ""}${l.qty}</td><td>${esc(l.reason)}</td><td>${esc(l.by)}</td></tr>`).join("")
       || `<tr><td colspan="5" class="empty">لا توجد حركات</td></tr>`;
@@ -1455,7 +1593,7 @@
     let cust = data.customers.find((c) => c.name === buyer) || null;
     for (const l of cart) {
       const p = productById(l.id);
-      if (p.stock < l.qty) { toast("المخزون اتغير: " + p.name); renderCart(); return; }
+      if (p.stock < cartQtyOf(l.id)) { toast("المخزون اتغير: " + p.name); renderCart(); return; }
     }
 
     const typedRaw = $("paidInput").value.trim();
@@ -1505,7 +1643,7 @@
       customer: buyer || "عميل نقدي",
       items: cart.map((l) => {
         const p = productById(l.id);
-        return { id: p.id, name: p.name, price: p.price, cost: p.cost, qty: l.qty, lineTotal: p.price * l.qty };
+        return { id: p.id, name: p.name, price: l.price, cost: p.cost, qty: l.qty, lineTotal: l.price * l.qty };
       }),
       subtotal: t.subtotal, discount: t.disc, total: t.total,
       payments, change: returned, owed
