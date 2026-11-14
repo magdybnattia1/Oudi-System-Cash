@@ -497,9 +497,9 @@
   <div class="modal">
     <h3>مستخدم جديد</h3>
     <div class="form-grid">
-      <div><label>الاسم</label><input id="uName"></div>
+      <div><label for="uName">الاسم</label><input id="uName" type="text" autocomplete="off" disabled="false" readonly="false"></div>
       <div class="form-row">
-        <div><label>كلمة المرور</label><input type="password" id="uPass"></div>
+        <div><label for="uPass">كلمة المرور</label><input type="password" id="uPass" autocomplete="new-password" disabled="false" readonly="false"></div>
         <div><label>الدور</label>
           <select id="uRole"><option value="cashier">كاشير</option><option value="manager">مدير</option></select>
         </div>
@@ -1430,7 +1430,18 @@
   });
 
   $("saveSettingsBtn").onclick = saveSettings;
-  $("addUserBtn").onclick = () => { $("uName").value = ""; $("uPass").value = ""; openModal("userModal"); };
+  $("addUserBtn").onclick = () => {
+    const nameField = $("uName"), passField = $("uPass");
+    [nameField, passField].forEach((field) => {
+      field.disabled = false;
+      field.readOnly = false;
+      field.removeAttribute("disabled");
+      field.removeAttribute("readonly");
+      field.value = "";
+    });
+    openModal("userModal");
+    requestAnimationFrame(() => nameField.focus());
+  };
   $("saveUserBtn").onclick = saveUser;
   $("usersBody").addEventListener("click", (e) => {
     const d = e.target.closest("[data-deluser]");
